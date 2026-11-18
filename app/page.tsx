@@ -561,6 +561,25 @@ export default function SnapDocAI() {
             )}
           </div>
 
+          <div className="mt-4 flex gap-2">
+            <button onClick={runOCR} disabled={ocrBusy} className="flex-1 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs font-semibold text-emerald-700 disabled:opacity-50">
+              {ocrBusy ? "Reading text…" : "Extract text (OCR)"}
+            </button>
+            <button onClick={() => setCapturedPages((pages) => pages.slice(0, -1))} disabled={capturedPages.length === 0} className="rounded-xl border border-neutral-200 px-3 py-2.5 text-xs text-neutral-600 disabled:opacity-40">
+              Remove last page
+            </button>
+          </div>
+          {ocrText && (
+            <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-xs font-semibold text-emerald-800">Extracted text (stays on this device)</span>
+                <button onClick={() => setOcrText("")} className="text-xs text-emerald-700">Clear</button>
+              </div>
+              <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-xs text-neutral-700">{ocrText}</pre>
+              <button onClick={() => navigator.clipboard?.writeText(ocrText)} className="mt-2 text-xs font-semibold text-emerald-700">Copy OCR text</button>
+            </div>
+          )}
+
           {/* AI Filters Selector */}
           <div className="mt-5">
             <p className="text-xs font-semibold text-neutral-500 mb-2 flex items-center gap-1">
