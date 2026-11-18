@@ -12,3 +12,9 @@ create table if not exists public.scanned_documents (
 
 create index if not exists scanned_documents_created_at_idx
   on public.scanned_documents (created_at desc);
+
+-- Telemetry is written only by the server using the service-role key.
+-- No anonymous or authenticated browser access is granted.
+alter table public.scanned_documents enable row level security;
+revoke all on table public.scanned_documents from anon, authenticated;
+grant insert on table public.scanned_documents to service_role;
