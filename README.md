@@ -10,6 +10,25 @@ A mobile-first, no-login document scanner built with Next.js.
 - PDF merge and PDF export run locally.
 - The backend receives only scan metadata (file name, page count, filter, category, and session ID). It never accepts document images, PDF bytes, or OCR text.
 
+## Phase 2 scanner improvements
+
+- Multi-page capture with local reorder, rotate, remove, manual crop, and straighten controls.
+- English + Urdu OCR across all captured pages, processed in the browser.
+- A4 and US Letter PDF output with image fitting and local PDF merging.
+- Local enhancement presets, including a tile-adaptive black-and-white cleanup filter.
+- Camera tracks are stopped when the scanner component unmounts.
+- The Phase 2 preview deployment uses an isolated Neon `phase-2` branch; production is not modified by preview testing.
+
+## Metadata API
+
+- `POST /api/v1/supersnap/process` is the versioned metadata endpoint.
+- `POST /api/log-scan` remains as a compatibility route.
+- The API accepts only page count, filter, category, and an optional session identifier.
+- It rejects unknown payload fields, cross-origin requests, invalid values, and oversized JSON bodies.
+- The original filename is deliberately not stored. Images, PDFs, and OCR text never enter the API.
+
+**Still outside this Phase 2 preview:** automatic document-edge detection, automatic four-corner perspective correction, and device-by-device physical testing require further implementation/validation. Manual crop and straighten are available, but are not a substitute for automatic perspective correction.
+
 ## Local development
 
 ```bash
