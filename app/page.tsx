@@ -54,22 +54,18 @@ export default function SnapDocAI() {
     });
   };
   const undoEdit = () => {
-    setUndoStack((stack) => {
-      if (!stack.length) return stack;
-      const previous = stack[stack.length - 1];
-      setRedoStack((redo) => [...redo, capturedPages]);
-      setCapturedPages(previous);
-      return stack.slice(0, -1);
-    });
+    if (!undoStack.length) return;
+    const previous = undoStack[undoStack.length - 1];
+    setRedoStack([...redoStack, capturedPages]);
+    setCapturedPages(previous);
+    setUndoStack(undoStack.slice(0, -1));
   };
   const redoEdit = () => {
-    setRedoStack((stack) => {
-      if (!stack.length) return stack;
-      const next = stack[stack.length - 1];
-      setUndoStack((undo) => [...undo, capturedPages]);
-      setCapturedPages(next);
-      return stack.slice(0, -1);
-    });
+    if (!redoStack.length) return;
+    const next = redoStack[redoStack.length - 1];
+    setUndoStack([...undoStack, capturedPages]);
+    setCapturedPages(next);
+    setRedoStack(redoStack.slice(0, -1));
   };
   const [currentFilter, setCurrentFilter] = useState<string>("magic");
   const [docTitle, setDocTitle] = useState<string>("");
@@ -244,10 +240,10 @@ export default function SnapDocAI() {
       });
       const track = stream.getVideoTracks()[0];
       try {
-        const capabilities = track.getCapabilities();
+        const capabilities = track.getCapabilities() as MediaTrackCapabilities & { focusMode?: string[]; exposureMode?: string[] };
         const advanced: MediaTrackConstraintSet[] = [];
-        if (capabilities.focusMode?.includes("continuous")) advanced.push({ focusMode: "continuous" } as MediaTrackConstraintSet);
-        if (capabilities.exposureMode?.includes("continuous")) advanced.push({ exposureMode: "continuous" } as MediaTrackConstraintSet);
+        if (capabilities.focusMode?.includes("continuous")) advanced.push({ focusMode: "continuous" } as unknown as MediaTrackConstraintSet);
+        if (capabilities.exposureMode?.includes("continuous")) advanced.push({ exposureMode: "continuous" } as unknown as MediaTrackConstraintSet);
         if (advanced.length) await track.applyConstraints({ advanced });
       } catch {
         // Some mobile browsers do not expose focus controls.
