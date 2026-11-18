@@ -69,6 +69,44 @@ export default function SnapDocAI() {
     localStorage.setItem("snapdoc_files", JSON.stringify(updatedDocs));
   };
 
+  // Release camera hardware on unmount.
+  useEffect(() => {
+    return () => {
+      const stream = videoRef.current?.srcObject as MediaStream | null;
+      stream?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  // Reorder captured pages without leaving the device.
+  const movePage = (index: number, direction: -1 | 1) => {
+    setCapturedPages((pages) => {
+      const target = index + direction;
+      if (target < 0 || target >= pages.length) return pages;
+      const next = [...pages];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
+
+  const rotatePage = (index: number) => {
+    const source = capturedPages[index];
+    if (!source) return;
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.height;
+      canvas.height = img.width;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(Math.PI / 2);
+      ctx.drawImage(img, -img.width / 2, -img.height / 2);
+      const rotated = canvas.toDataURL("image/jpeg", 0.92);
+      setCapturedPages((pages) => pages.map((page, i) => (i === index ? rotated : page)));
+    };
+    img.src = source;
+  };
+
   // Start Live Camera
   const startCamera = async () => {
     setActiveTab("scan");
