@@ -735,7 +735,7 @@ export default function SnapDocAI() {
           <div className="flex items-center justify-between mb-4">
             <button
               onClick={() => {
-                updateCapturedPages[]);
+                updateCapturedPages([]);
                 setActiveTab("home");
               }}
               className="text-sm text-neutral-500"
