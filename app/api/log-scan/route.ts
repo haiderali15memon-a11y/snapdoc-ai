@@ -1,1 +1,3 @@
-export { runtime, dynamic, POST } from "../v1/supersnap/process/route";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export { POST } from "../v1/supersnap/process/route";
