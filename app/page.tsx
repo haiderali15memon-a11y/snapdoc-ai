@@ -41,6 +41,36 @@ export default function SnapDocAI() {
 
   // Scanner & Editor States
   const [capturedPages, setCapturedPages] = useState<string[]>([]);
+  const [undoStack, setUndoStack] = useState<string[][]>([]);
+  const [redoStack, setRedoStack] = useState<string[][]>([]);
+  const updateCapturedPages = (updater: string[] | ((pages: string[]) => string[])) => {
+    updateCapturedPages(current) => {
+      const next = typeof updater === "function" ? updater(current) : updater;
+      if (next !== current) {
+        setUndoStack((stack) => [...stack.slice(-19), current]);
+        setRedoStack([]);
+      }
+      return next;
+    });
+  };
+  const undoEdit = () => {
+    setUndoStack((stack) => {
+      if (!stack.length) return stack;
+      const previous = stack[stack.length - 1];
+      setRedoStack((redo) => [...redo, capturedPages]);
+      updateCapturedPagesprevious);
+      return stack.slice(0, -1);
+    });
+  };
+  const redoEdit = () => {
+    setRedoStack((stack) => {
+      if (!stack.length) return stack;
+      const next = stack[stack.length - 1];
+      setUndoStack((undo) => [...undo, capturedPages]);
+      updateCapturedPagesnext);
+      return stack.slice(0, -1);
+    });
+  };
   const [currentFilter, setCurrentFilter] = useState<string>("magic");
   const [docTitle, setDocTitle] = useState<string>("");
   const [docCategory, setDocCategory] = useState<"ID Cards" | "Invoices" | "Notes">("Notes");
@@ -82,7 +112,7 @@ export default function SnapDocAI() {
 
   // Reorder captured pages without leaving the device.
   const movePage = (index: number, direction: -1 | 1) => {
-    setCapturedPages((pages) => {
+    updateCapturedPages(pages) => {
       const target = index + direction;
       if (target < 0 || target >= pages.length) return pages;
       const next = [...pages];
@@ -108,7 +138,7 @@ export default function SnapDocAI() {
       ctx.rotate(radians);
       ctx.drawImage(img, -img.width / 2, -img.height / 2);
       const rotated = canvas.toDataURL("image/jpeg", 0.92);
-      setCapturedPages((pages) => pages.map((page, i) => (i === index ? rotated : page)));
+      updateCapturedPages(pages) => pages.map((page, i) => (i === index ? rotated : page)));
     };
     img.src = source;
   };
@@ -134,11 +164,61 @@ export default function SnapDocAI() {
       if (!ctx) return;
       ctx.drawImage(img, x, y, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
       const cropped = canvas.toDataURL("image/jpeg", 0.92);
-      setCapturedPages((pages) => pages.map((page, i) => (i === index ? cropped : page)));
+      updateCapturedPages(pages) => pages.map((page, i) => (i === index ? cropped : page)));
       setCropMargins({ top: 0, right: 0, bottom: 0, left: 0 });
       setStraightenAngle(0);
     };
     img.src = source;
+  };
+
+  const autoCropPage = (index: number) => {
+    const source = capturedPages[index];
+    if (!source) return;
+    const img = new Image();
+    img.onload = () => {
+      const maxSide = 1100;
+      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const sample = document.createElement("canvas");
+      sample.width = Math.max(1, Math.round(img.width * scale));
+      sample.height = Math.max(1, Math.round(img.height * scale));
+      const sampleCtx = sample.getContext("2d", { willReadFrequently: true });
+      if (!sampleCtx) return;
+      sampleCtx.drawImage(img, 0, 0, sample.width, sample.height);
+      const { data, width, height } = sampleCtx.getImageData(0, 0, sample.width, sample.height);
+      const lum = (x: number, y: number) => {
+        const p = (y * width + x) * 4;
+        return 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+      };
+      const inset = Math.max(2, Math.floor(Math.min(width, height) * 0.025));
+      const corners = [lum(inset,inset),lum(width-inset-1,inset),lum(inset,height-inset-1),lum(width-inset-1,height-inset-1)].sort((a,b)=>a-b);
+      const background = (corners[1] + corners[2]) / 2;
+      let minX=width,minY=height,maxX=-1,maxY=-1,hits=0;
+      for(let y=1;y<height-1;y+=1) for(let x=1;x<width-1;x+=1) {
+        const value=lum(x,y);
+        const gx=Math.abs(lum(x+1,y)-lum(x-1,y));
+        const gy=Math.abs(lum(x,y+1)-lum(x,y-1));
+        if(Math.abs(value-background)>27 || gx+gy>58) {
+          minX=Math.min(minX,x); minY=Math.min(minY,y); maxX=Math.max(maxX,x); maxY=Math.max(maxY,y); hits+=1;
+        }
+      }
+      const boxWidth=maxX-minX+1, boxHeight=maxY-minY+1;
+      const areaRatio=(boxWidth*boxHeight)/(width*height);
+      if(hits<width*height*0.002 || areaRatio<0.18 || areaRatio>0.995 || minX<=1 || minY<=1 || maxX>=width-2 || maxY>=height-2) {
+        alert("Document edges clear nahi milay. Contrasting background ke sath dobara scan karein ya manual crop use karein.");
+        return;
+      }
+      const pad=Math.max(2,Math.round(Math.min(boxWidth,boxHeight)*0.008));
+      const sx=Math.max(0,Math.round((minX-pad)/scale)), sy=Math.max(0,Math.round((minY-pad)/scale));
+      const sw=Math.min(img.width-sx,Math.round((boxWidth+pad*2)/scale));
+      const sh=Math.min(img.height-sy,Math.round((boxHeight+pad*2)/scale));
+      const output=document.createElement("canvas"); output.width=sw; output.height=sh;
+      const outputCtx=output.getContext("2d"); if(!outputCtx) return;
+      outputCtx.drawImage(img,sx,sy,sw,sh,0,0,sw,sh);
+      updateCapturedPages((pages)=>pages.map((page,i)=>i===index?output.toDataURL("image/png"):page));
+      setCropMargins({top:0,right:0,bottom:0,left:0});
+    };
+    img.onerror=()=>alert("Image load nahi ho saki. Dobara try karein.");
+    img.src=source;
   };
 
   const applyStraighten = () => {
@@ -149,14 +229,32 @@ export default function SnapDocAI() {
 
   // Start Live Camera
   const startCamera = async () => {
+    setUndoStack([]);
+    setRedoStack([]);
     setActiveTab("scan");
     setCameraActive(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 3840 },
+          height: { ideal: 2160 },
+          frameRate: { ideal: 30, max: 30 },
+        },
       });
+      const track = stream.getVideoTracks()[0];
+      try {
+        const capabilities = track.getCapabilities();
+        const advanced: MediaTrackConstraintSet[] = [];
+        if (capabilities.focusMode?.includes("continuous")) advanced.push({ focusMode: "continuous" } as MediaTrackConstraintSet);
+        if (capabilities.exposureMode?.includes("continuous")) advanced.push({ exposureMode: "continuous" } as MediaTrackConstraintSet);
+        if (advanced.length) await track.applyConstraints({ advanced });
+      } catch {
+        // Some mobile browsers do not expose focus controls.
+      }
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => undefined);
       }
     } catch (err) {
       alert("Camera access nahi mila. Aap Gallery se image import kar sakte hain.");
@@ -182,8 +280,8 @@ export default function SnapDocAI() {
     const ctx = canvas.getContext("2d");
     if (ctx) {
       ctx.drawImage(videoRef.current, 0, 0);
-      const imageData = canvas.toDataURL("image/jpeg", 0.9);
-      setCapturedPages((prev) => [...prev, imageData]);
+      const imageData = canvas.toDataURL("image/jpeg", 0.98);
+      updateCapturedPages(prev) => [...prev, imageData]);
     }
   };
 
@@ -196,7 +294,7 @@ export default function SnapDocAI() {
       const reader = new FileReader();
       reader.onload = (event) => {
         if (event.target?.result) {
-          setCapturedPages((prev) => [...prev, event.target!.result as string]);
+          updateCapturedPages(prev) => [...prev, event.target!.result as string]);
           setActiveTab("edit");
         }
       };
@@ -334,11 +432,18 @@ export default function SnapDocAI() {
         ctx.putImageData(frame, 0, 0);
       }
 
-      const processedData = canvas.toDataURL("image/jpeg", 0.85);
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (img.height * pdfWidth) / img.width;
-
-      pdf.addImage(processedData, "JPEG", 0, 0, pdfWidth, pdfHeight);
+      const processedData = canvas.toDataURL("image/png");
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 6;
+      const availableWidth = pageWidth - margin * 2;
+      const availableHeight = pageHeight - margin * 2 - 5;
+      const fitScale = Math.min(availableWidth / img.width, availableHeight / img.height);
+      const drawWidth = img.width * fitScale;
+      const drawHeight = img.height * fitScale;
+      const drawX = (pageWidth - drawWidth) / 2;
+      const drawY = (pageHeight - 5 - drawHeight) / 2;
+      pdf.addImage(processedData, "PNG", drawX, drawY, drawWidth, drawHeight, undefined, "FAST");
       // Subtle Free Branding Footer
       pdf.setFontSize(8);
       pdf.setTextColor(150);
@@ -378,7 +483,7 @@ export default function SnapDocAI() {
 
     // Reset & Return Home
     setIsProcessing(false);
-    setCapturedPages([]);
+    updateCapturedPages[]);
     setDocTitle("");
     setActiveTab("home");
   };
@@ -630,7 +735,7 @@ export default function SnapDocAI() {
           <div className="flex items-center justify-between mb-4">
             <button
               onClick={() => {
-                setCapturedPages([]);
+                updateCapturedPages[]);
                 setActiveTab("home");
               }}
               className="text-sm text-neutral-500"
@@ -678,7 +783,10 @@ export default function SnapDocAI() {
           <div className="mb-3">
             <div className="mb-2 flex items-center justify-between">
               <p className="text-xs font-semibold text-neutral-600">Pages ({capturedPages.length})</p>
-              <span className="text-[10px] text-neutral-400">Reorder • Rotate • Remove</span>
+              <div className="flex items-center gap-2">
+                <button onClick={undoEdit} disabled={undoStack.length===0} className="rounded-lg border border-neutral-200 bg-white px-2 py-1 text-[10px] font-semibold disabled:opacity-30">↶ Undo</button>
+                <button onClick={redoEdit} disabled={redoStack.length===0} className="rounded-lg border border-neutral-200 bg-white px-2 py-1 text-[10px] font-semibold disabled:opacity-30">↷ Redo</button>
+              </div>
             </div>
             <div className="flex gap-2 overflow-x-auto pb-2">
               {capturedPages.map((page, index) => (
@@ -688,7 +796,7 @@ export default function SnapDocAI() {
                   <div className="flex justify-between gap-1">
                     <button onClick={() => movePage(index, -1)} disabled={index === 0} aria-label={`Move page ${index + 1} left`} className="rounded bg-white px-1.5 py-1 text-[10px] disabled:opacity-30">←</button>
                     <button onClick={() => rotatePage(index)} aria-label={`Rotate page ${index + 1}`} className="rounded bg-white px-1.5 py-1 text-[10px]">↻</button>
-                    <button onClick={() => setCapturedPages((pages) => pages.filter((_, i) => i !== index))} aria-label={`Remove page ${index + 1}`} className="rounded bg-white px-1.5 py-1 text-[10px] text-red-600">×</button>
+                    <button onClick={() => updateCapturedPages(pages) => pages.filter((_, i) => i !== index))} aria-label={`Remove page ${index + 1}`} className="rounded bg-white px-1.5 py-1 text-[10px] text-red-600">×</button>
                     <button onClick={() => movePage(index, 1)} disabled={index === capturedPages.length - 1} aria-label={`Move page ${index + 1} right`} className="rounded bg-white px-1.5 py-1 text-[10px] disabled:opacity-30">→</button>
                   </div>
                 </div>
@@ -719,7 +827,10 @@ export default function SnapDocAI() {
               ))}
             </div>
             <div className="mt-2 flex items-center gap-2">
-              <button onClick={() => cropPage(selectedPageIndex)} className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-emerald-700 border border-emerald-200">Apply crop</button>
+              <div className="flex gap-1">
+                <button onClick={() => autoCropPage(selectedPageIndex)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white">Auto crop</button>
+                <button onClick={() => cropPage(selectedPageIndex)} className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-emerald-700 border border-emerald-200">Manual crop</button>
+              </div>
               <label className="flex-1 text-[10px] text-neutral-600">
                 Straighten: {straightenAngle}°
                 <input type="range" min="-15" max="15" step="0.5" value={straightenAngle} onChange={(e) => setStraightenAngle(Number(e.target.value))} className="block w-full" />
@@ -732,7 +843,7 @@ export default function SnapDocAI() {
             <button onClick={runOCR} disabled={ocrBusy} className="flex-1 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs font-semibold text-emerald-700 disabled:opacity-50">
               {ocrBusy ? "Reading text…" : "Extract text (OCR)"}
             </button>
-            <button onClick={() => setCapturedPages((pages) => pages.slice(0, -1))} disabled={capturedPages.length === 0} className="rounded-xl border border-neutral-200 px-3 py-2.5 text-xs text-neutral-600 disabled:opacity-40">
+            <button onClick={() => updateCapturedPages(pages) => pages.slice(0, -1))} disabled={capturedPages.length === 0} className="rounded-xl border border-neutral-200 px-3 py-2.5 text-xs text-neutral-600 disabled:opacity-40">
               Remove last page
             </button>
           </div>
