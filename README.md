@@ -12,9 +12,9 @@ A mobile-first, no-login document scanner built with Next.js.
 
 ## Phase 2 scanner improvements
 
-- Multi-page capture with local reorder, rotate, remove, manual crop, and straighten controls.
+- High-resolution camera capture (device-supported 4K preference, continuous focus where available), multi-page reorder/rotate/remove, automatic contrast-edge crop, manual crop, straighten, and undo/redo history.
 - English + Urdu OCR across all captured pages, processed in the browser.
-- A4 and US Letter PDF output with image fitting and local PDF merging.
+- A4 and US Letter PDF output with aspect-ratio-preserving page fitting and lossless PNG embedding to avoid the prior JPEG export blur; local PDF merging.
 - Local enhancement presets, including a tile-adaptive black-and-white cleanup filter.
 - Camera tracks are stopped when the scanner component unmounts.
 - The Phase 2 preview deployment uses an isolated Neon `phase-2` branch; production is not modified by preview testing.
@@ -27,7 +27,7 @@ A mobile-first, no-login document scanner built with Next.js.
 - It rejects unknown payload fields, cross-origin requests, invalid values, and oversized JSON bodies.
 - The original filename is deliberately not stored. Images, PDFs, and OCR text never enter the API.
 
-**Still outside this Phase 2 preview:** automatic document-edge detection, automatic four-corner perspective correction, and device-by-device physical testing require further implementation/validation. Manual crop and straighten are available, but are not a substitute for automatic perspective correction.
+**Still requiring further validation:** automatic four-corner perspective correction (deskewing angled page corners) is not yet implemented; current auto-crop estimates a rectangular document boundary from image contrast/edges. Camera resolution and focus depend on device/browser hardware. Test on multiple real phones before treating scan quality as production-ready.
 
 ## Local development
 
