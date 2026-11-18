@@ -167,54 +167,111 @@ export default function SnapDocAI() {
     img.src = source;
   };
 
-  const autoCropPage = (index: number) => {
+  const autoCropPage = async (index: number) => {
     const source = capturedPages[index];
     if (!source) return;
-    const img = new Image();
-    img.onload = () => {
-      const maxSide = 1100;
+    try {
+      // Load OpenCV once in the browser. It detects document contours and performs
+      // a four-corner perspective transform, rather than guessing from background brightness.
+      const w = window as Window & { cv?: any; __snapdocCvPromise?: Promise<any> };
+      if (!w.cv || !w.cv.Mat) {
+        if (!w.__snapdocCvPromise) {
+          w.__snapdocCvPromise = new Promise((resolve, reject) => {
+            const existing = document.querySelector<HTMLScriptElement>('script[data-snapdoc-opencv]');
+            const script = existing || document.createElement("script");
+            const timeout = window.setTimeout(() => reject(new Error("Document detector load timed out")), 25000);
+            const ready = () => {
+              const cv = w.cv;
+              if (cv && cv.Mat) { window.clearTimeout(timeout); resolve(cv); }
+              else if (cv) cv.onRuntimeInitialized = () => { window.clearTimeout(timeout); resolve(cv); };
+            };
+            script.addEventListener("load", ready, { once: true });
+            script.addEventListener("error", () => { window.clearTimeout(timeout); reject(new Error("Document detector could not load")); }, { once: true });
+            if (!existing) {
+              script.src = "https://docs.opencv.org/4.x/opencv.js";
+              script.async = true;
+              script.dataset.snapdocOpencv = "true";
+              document.head.appendChild(script);
+            } else ready();
+          });
+        }
+        await w.__snapdocCvPromise;
+      }
+      const cv = w.cv;
+      const img = new Image();
+      img.src = source;
+      await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = () => reject(new Error("Image could not load")); });
+      const maxSide = 1800;
       const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
       const sample = document.createElement("canvas");
-      sample.width = Math.max(1, Math.round(img.width * scale));
-      sample.height = Math.max(1, Math.round(img.height * scale));
-      const sampleCtx = sample.getContext("2d", { willReadFrequently: true });
-      if (!sampleCtx) return;
+      sample.width = Math.round(img.width * scale);
+      sample.height = Math.round(img.height * scale);
+      const sampleCtx = sample.getContext("2d");
+      if (!sampleCtx) throw new Error("Canvas unavailable");
       sampleCtx.drawImage(img, 0, 0, sample.width, sample.height);
-      const { data, width, height } = sampleCtx.getImageData(0, 0, sample.width, sample.height);
-      const lum = (x: number, y: number) => {
-        const p = (y * width + x) * 4;
-        return 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
-      };
-      const inset = Math.max(2, Math.floor(Math.min(width, height) * 0.025));
-      const corners = [lum(inset,inset),lum(width-inset-1,inset),lum(inset,height-inset-1),lum(width-inset-1,height-inset-1)].sort((a,b)=>a-b);
-      const background = (corners[1] + corners[2]) / 2;
-      let minX=width,minY=height,maxX=-1,maxY=-1,hits=0;
-      for(let y=1;y<height-1;y+=1) for(let x=1;x<width-1;x+=1) {
-        const value=lum(x,y);
-        const gx=Math.abs(lum(x+1,y)-lum(x-1,y));
-        const gy=Math.abs(lum(x,y+1)-lum(x,y-1));
-        if(Math.abs(value-background)>27 || gx+gy>58) {
-          minX=Math.min(minX,x); minY=Math.min(minY,y); maxX=Math.max(maxX,x); maxY=Math.max(maxY,y); hits+=1;
+      const src = cv.imread(sample);
+      const gray = new cv.Mat();
+      const blurred = new cv.Mat();
+      const edges = new cv.Mat();
+      const contours = new cv.MatVector();
+      const hierarchy = new cv.Mat();
+      try {
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+        cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+        cv.Canny(blurred, edges, 35, 120);
+        const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+        cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
+        kernel.delete();
+        cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        let best: any = null;
+        let bestArea = 0;
+        const imageArea = sample.width * sample.height;
+        for (let i = 0; i < contours.size(); i++) {
+          const contour = contours.get(i);
+          const perimeter = cv.arcLength(contour, true);
+          const approx = new cv.Mat();
+          cv.approxPolyDP(contour, approx, 0.02 * perimeter, true);
+          const area = Math.abs(cv.contourArea(approx));
+          if (approx.rows === 4 && area > imageArea * 0.12 && area < imageArea * 0.98 && area > bestArea && cv.isContourConvex(approx)) {
+            best?.delete();
+            best = approx;
+            bestArea = area;
+          } else approx.delete();
+          contour.delete();
         }
+        if (!best) throw new Error("Document ke 4 corners detect nahi huay. Page ko frame ke andar rakhein aur dobara try karein.");
+        const pts: {x:number;y:number}[] = [];
+        for (let i = 0; i < 4; i++) pts.push({ x: best.intAt(i, 0), y: best.intAt(i, 1) });
+        best.delete();
+        const sum = (p: {x:number;y:number}) => p.x + p.y;
+        const diff = (p: {x:number;y:number}) => p.x - p.y;
+        const tl = pts.reduce((a,b) => sum(a) < sum(b) ? a : b);
+        const br = pts.reduce((a,b) => sum(a) > sum(b) ? a : b);
+        const tr = pts.reduce((a,b) => diff(a) > diff(b) ? a : b);
+        const bl = pts.reduce((a,b) => diff(a) < diff(b) ? a : b);
+        const distance = (a: {x:number;y:number}, b: {x:number;y:number}) => Math.hypot(a.x-b.x,a.y-b.y);
+        const outW = Math.max(distance(tl,tr), distance(bl,br));
+        const outH = Math.max(distance(tl,bl), distance(tr,br));
+        if (outW < 100 || outH < 100) throw new Error("Detected document is too small. Move closer and try again.");
+        // Transform the original-resolution image using the detected sample-space corners.
+        const factor = 1 / scale;
+        const original = cv.imread(img);
+        const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x*factor,tl.y*factor,tr.x*factor,tr.y*factor,br.x*factor,br.y*factor,bl.x*factor,bl.y*factor]);
+        const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0,outW*factor,0,outW*factor,outH*factor,0,outH*factor]);
+        const transform = cv.getPerspectiveTransform(srcPts, dstPts);
+        const warped = new cv.Mat();
+        cv.warpPerspective(original, warped, transform, new cv.Size(Math.round(outW*factor), Math.round(outH*factor)), cv.INTER_CUBIC, cv.BORDER_REPLICATE);
+        const output = document.createElement("canvas");
+        cv.imshow(output, warped);
+        updateCapturedPages((pages) => pages.map((page, i) => i === index ? output.toDataURL("image/png") : page));
+        setCropMargins({top:0,right:0,bottom:0,left:0});
+        original.delete(); srcPts.delete(); dstPts.delete(); transform.delete(); warped.delete();
+      } finally {
+        src.delete(); gray.delete(); blurred.delete(); edges.delete(); contours.delete(); hierarchy.delete();
       }
-      const boxWidth=maxX-minX+1, boxHeight=maxY-minY+1;
-      const areaRatio=(boxWidth*boxHeight)/(width*height);
-      if(hits<width*height*0.002 || areaRatio<0.18 || areaRatio>0.995 || minX<=1 || minY<=1 || maxX>=width-2 || maxY>=height-2) {
-        alert("Document edges clear nahi milay. Contrasting background ke sath dobara scan karein ya manual crop use karein.");
-        return;
-      }
-      const pad=Math.max(2,Math.round(Math.min(boxWidth,boxHeight)*0.008));
-      const sx=Math.max(0,Math.round((minX-pad)/scale)), sy=Math.max(0,Math.round((minY-pad)/scale));
-      const sw=Math.min(img.width-sx,Math.round((boxWidth+pad*2)/scale));
-      const sh=Math.min(img.height-sy,Math.round((boxHeight+pad*2)/scale));
-      const output=document.createElement("canvas"); output.width=sw; output.height=sh;
-      const outputCtx=output.getContext("2d"); if(!outputCtx) return;
-      outputCtx.drawImage(img,sx,sy,sw,sh,0,0,sw,sh);
-      updateCapturedPages((pages)=>pages.map((page,i)=>i===index?output.toDataURL("image/png"):page));
-      setCropMargins({top:0,right:0,bottom:0,left:0});
-    };
-    img.onerror=()=>alert("Image load nahi ho saki. Dobara try karein.");
-    img.src=source;
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Auto crop failed. Please try again with all four document edges visible.");
+    }
   };
 
   const applyStraighten = () => {
@@ -817,14 +874,14 @@ export default function SnapDocAI() {
             <div className="grid grid-cols-2 gap-x-3 gap-y-2">
               {(["top", "right", "bottom", "left"] as const).map((side) => (
                 <label key={side} className="text-[10px] capitalize text-neutral-600">
-                  {side}: {cropMargins[side]}%
+                  {side}
                   <input type="range" min="0" max="35" value={cropMargins[side]} onChange={(e) => setCropMargins((m) => ({ ...m, [side]: Number(e.target.value) }))} className="block w-full" />
                 </label>
               ))}
             </div>
             <div className="mt-2 flex items-center gap-2">
               <div className="flex gap-1">
-                <button onClick={() => autoCropPage(selectedPageIndex)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white">Auto crop</button>
+                <button onClick={() => autoCropPage(selectedPageIndex)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white">Auto detect & crop</button>
                 <button onClick={() => cropPage(selectedPageIndex)} className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-emerald-700 border border-emerald-200">Manual crop</button>
               </div>
               <label className="flex-1 text-[10px] text-neutral-600">
