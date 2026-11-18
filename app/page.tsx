@@ -19,6 +19,8 @@ import {
   Layers,
 } from "lucide-react";
 import { jsPDF } from "jspdf";
+import { PDFDocument } from "pdf-lib";
+import { createWorker } from "tesseract.js";
 
 interface ScannedDoc {
   id: string;
@@ -47,6 +49,10 @@ export default function SnapDocAI() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [cameraActive, setCameraActive] = useState<boolean>(false);
+  const [ocrText, setOcrText] = useState<string>("");
+  const [ocrBusy, setOcrBusy] = useState<boolean>(false);
+  const [mergeBusy, setMergeBusy] = useState<boolean>(false);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
 
   // Load saved documents from browser localStorage (No-Login persistence)
   useEffect(() => {
@@ -117,6 +123,60 @@ export default function SnapDocAI() {
       };
       reader.readAsDataURL(file);
     });
+  };
+
+  // OCR runs fully in the browser; document images are never uploaded.
+  const runOCR = async () => {
+    const source = capturedPages[0];
+    if (!source) {
+      fileInputRef.current?.click();
+      return;
+    }
+    setOcrBusy(true);
+    setOcrText("");
+    try {
+      const worker = await createWorker("eng");
+      const result = await worker.recognize(source);
+      setOcrText(result.data.text.trim() || "No readable text found. Try a clearer image.");
+      await worker.terminate();
+    } catch (error) {
+      console.error("On-device OCR failed:", error);
+      setOcrText("OCR could not process this image. Please try another image.");
+    } finally {
+      setOcrBusy(false);
+    }
+  };
+
+  const mergePDFs = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []).filter((file) => file.type === "application/pdf");
+    if (files.length < 2) {
+      alert("Please select at least two PDF files to merge.");
+      event.target.value = "";
+      return;
+    }
+    setMergeBusy(true);
+    try {
+      const merged = await PDFDocument.create();
+      for (const file of files) {
+        const source = await PDFDocument.load(await file.arrayBuffer());
+        const pages = await merged.copyPages(source, source.getPageIndices());
+        pages.forEach((page) => merged.addPage(page));
+      }
+      const bytes = await merged.save();
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "SnapDoc-Merged.pdf";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("PDF merge failed:", error);
+      alert("Could not merge these PDFs. One may be password-protected or damaged.");
+    } finally {
+      setMergeBusy(false);
+      event.target.value = "";
+    }
   };
 
   // CSS Filter Classes for AI Enhancement Preview
@@ -214,7 +274,8 @@ export default function SnapDocAI() {
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-neutral-900 font-sans max-w-md mx-auto relative shadow-xl border-x border-neutral-200 flex flex-col">
-      {/* Hidden File Input for Gallery */}
+      {/* Hidden local-only file inputs */}
+      <input type="file" accept="application/pdf" multiple ref={pdfInputRef} onChange={mergePDFs} className="hidden" />
       <input
         type="file"
         accept="image/*"
@@ -271,6 +332,18 @@ export default function SnapDocAI() {
             ))}
           </div>
 
+          {ocrText && (
+            <div className="bg-white border border-emerald-200 rounded-2xl p-3 mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-emerald-700">On-device OCR result</p>
+                <button onClick={() => setOcrText("")} className="text-neutral-400"><X className="w-4 h-4" /></button>
+              </div>
+              <pre className="text-xs text-neutral-700 whitespace-pre-wrap break-words max-h-40 overflow-auto">{ocrText}</pre>
+              <button onClick={() => navigator.clipboard?.writeText(ocrText)} className="mt-2 text-xs font-semibold text-emerald-700">Copy text</button>
+            </div>
+          )}
+          {ocrBusy && <p className="text-xs text-emerald-700 mb-3">Running OCR on this device…</p>}
+
           {/* Quick Action Mini Tools */}
           <div className="grid grid-cols-3 gap-2.5 mb-6">
             <button
@@ -281,18 +354,18 @@ export default function SnapDocAI() {
               <span className="text-[11px] font-medium">ID Card</span>
             </button>
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={runOCR}
               className="bg-white p-3 rounded-2xl border border-neutral-200 flex flex-col items-center gap-1.5 hover:border-emerald-500 transition"
             >
               <ScanText className="w-5 h-5 text-emerald-600" />
               <span className="text-[11px] font-medium">AI OCR</span>
             </button>
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => pdfInputRef.current?.click()}
               className="bg-white p-3 rounded-2xl border border-neutral-200 flex flex-col items-center gap-1.5 hover:border-emerald-500 transition"
             >
               <Layers className="w-5 h-5 text-emerald-600" />
-              <span className="text-[11px] font-medium">Merge PDF</span>
+              <span className="text-[11px] font-medium">{mergeBusy ? "Merging..." : "Merge PDF"}</span>
             </button>
           </div>
 
