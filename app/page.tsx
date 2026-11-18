@@ -50,6 +50,7 @@ export default function SnapDocAI() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [cameraActive, setCameraActive] = useState<boolean>(false);
   const [ocrText, setOcrText] = useState<string>("");
+  const [pdfFormat, setPdfFormat] = useState<"a4" | "letter">("a4");
   const [ocrBusy, setOcrBusy] = useState<boolean>(false);
   const [mergeBusy, setMergeBusy] = useState<boolean>(false);
   const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -125,24 +126,29 @@ export default function SnapDocAI() {
     });
   };
 
-  // OCR runs fully in the browser; document images are never uploaded.
+  // Multilingual OCR runs locally across every page; no image or OCR text is uploaded.
   const runOCR = async () => {
-    const source = capturedPages[0];
-    if (!source) {
+    if (capturedPages.length === 0) {
       fileInputRef.current?.click();
       return;
     }
     setOcrBusy(true);
     setOcrText("");
+    let worker: Awaited<ReturnType<typeof createWorker>> | undefined;
     try {
-      const worker = await createWorker("eng");
-      const result = await worker.recognize(source);
-      setOcrText(result.data.text.trim() || "No readable text found. Try a clearer image.");
-      await worker.terminate();
+      worker = await createWorker("eng+urd");
+      const results: string[] = [];
+      for (let index = 0; index < capturedPages.length; index++) {
+        const result = await worker.recognize(capturedPages[index]);
+        const text = result.data.text.trim();
+        results.push(`--- Page ${index + 1} ---\\n${text || "No readable text found."}`);
+      }
+      setOcrText(results.join("\\n\\n"));
     } catch (error) {
-      console.error("On-device OCR failed:", error);
-      setOcrText("OCR could not process this image. Please try another image.");
+      console.error("On-device multilingual OCR failed:", error);
+      setOcrText("OCR could not process this document. Check your internet connection for language data, then try a clearer image.");
     } finally {
+      await worker?.terminate().catch(() => undefined);
       setOcrBusy(false);
     }
   };
@@ -199,10 +205,10 @@ export default function SnapDocAI() {
     setIsProcessing(true);
 
     const finalTitle = docTitle.trim() || `Scan_${new Date().toLocaleDateString().replace(/\//g, "-")}`;
-    const pdf = new jsPDF();
+    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: pdfFormat });
 
     for (let i = 0; i < capturedPages.length; i++) {
-      if (i > 0) pdf.addPage();
+      if (i > 0) pdf.addPage(pdfFormat);
 
       // Process image with selected AI filter
       const img = new Image();
@@ -224,7 +230,7 @@ export default function SnapDocAI() {
       // Subtle Free Branding Footer
       pdf.setFontSize(8);
       pdf.setTextColor(150);
-      pdf.text("Scanned free with SnapDoc AI", 10, pdf.internal.pageSize.getHeight() - 5);
+      pdf.text("Scanned free with SnapDoc AI", 10, pdf.internal.pageSize.getHeight() - 4);
     }
 
     // Download PDF directly to user's device
@@ -244,7 +250,7 @@ export default function SnapDocAI() {
 
     // Trigger Backend API (SQL Database + Zapier Webhook)
     try {
-      await fetch("/api/log-scan", {
+      const logResponse = await fetch("/api/v1/supersnap/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -549,7 +555,36 @@ export default function SnapDocAI() {
             </select>
           </div>
 
-          {/* Preview Image with Live AI Filter */}
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <label className="text-xs font-medium text-neutral-600" htmlFor="pdf-format">PDF page size</label>
+            <select id="pdf-format" value={pdfFormat} onChange={(e) => setPdfFormat(e.target.value as "a4" | "letter")} className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs">
+              <option value="a4">A4</option>
+              <option value="letter">US Letter</option>
+            </select>
+          </div>
+
+          <div className="mb-3">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs font-semibold text-neutral-600">Pages ({capturedPages.length})</p>
+              <span className="text-[10px] text-neutral-400">Reorder • Rotate • Remove</span>
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-2">
+              {capturedPages.map((page, index) => (
+                <div key={index} className="w-24 shrink-0 rounded-xl border border-neutral-200 bg-neutral-50 p-1.5">
+                  <img src={page} alt={`Page ${index + 1}`} className="h-20 w-full rounded-lg object-contain bg-white" />
+                  <p className="my-1 text-center text-[10px] font-semibold text-neutral-600">Page {index + 1}</p>
+                  <div className="flex justify-between gap-1">
+                    <button onClick={() => movePage(index, -1)} disabled={index === 0} aria-label={`Move page ${index + 1} left`} className="rounded bg-white px-1.5 py-1 text-[10px] disabled:opacity-30">←</button>
+                    <button onClick={() => rotatePage(index)} aria-label={`Rotate page ${index + 1}`} className="rounded bg-white px-1.5 py-1 text-[10px]">↻</button>
+                    <button onClick={() => setCapturedPages((pages) => pages.filter((_, i) => i !== index))} aria-label={`Remove page ${index + 1}`} className="rounded bg-white px-1.5 py-1 text-[10px] text-red-600">×</button>
+                    <button onClick={() => movePage(index, 1)} disabled={index === capturedPages.length - 1} aria-label={`Move page ${index + 1} right`} className="rounded bg-white px-1.5 py-1 text-[10px] disabled:opacity-30">→</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+                    {/* Preview Image with Live AI Filter */}
           <div className="flex-1 bg-neutral-100 rounded-2xl p-4 flex items-center justify-center overflow-hidden border border-neutral-200">
             {capturedPages[0] && (
               <img
