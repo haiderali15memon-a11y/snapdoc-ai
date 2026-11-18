@@ -51,6 +51,9 @@ export default function SnapDocAI() {
   const [cameraActive, setCameraActive] = useState<boolean>(false);
   const [ocrText, setOcrText] = useState<string>("");
   const [pdfFormat, setPdfFormat] = useState<"a4" | "letter">("a4");
+  const [selectedPageIndex, setSelectedPageIndex] = useState(0);
+  const [cropMargins, setCropMargins] = useState({ top: 0, right: 0, bottom: 0, left: 0 });
+  const [straightenAngle, setStraightenAngle] = useState(0);
   const [ocrBusy, setOcrBusy] = useState<boolean>(false);
   const [mergeBusy, setMergeBusy] = useState<boolean>(false);
   const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -88,23 +91,60 @@ export default function SnapDocAI() {
     });
   };
 
-  const rotatePage = (index: number) => {
+  const rotatePageBy = (index: number, degrees: number) => {
     const source = capturedPages[index];
     if (!source) return;
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement("canvas");
-      canvas.width = img.height;
-      canvas.height = img.width;
+      const radians = (degrees * Math.PI) / 180;
+      const sin = Math.abs(Math.sin(radians));
+      const cos = Math.abs(Math.cos(radians));
+      canvas.width = Math.ceil(img.width * cos + img.height * sin);
+      canvas.height = Math.ceil(img.height * cos + img.width * sin);
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.translate(canvas.width / 2, canvas.height / 2);
-      ctx.rotate(Math.PI / 2);
+      ctx.rotate(radians);
       ctx.drawImage(img, -img.width / 2, -img.height / 2);
       const rotated = canvas.toDataURL("image/jpeg", 0.92);
       setCapturedPages((pages) => pages.map((page, i) => (i === index ? rotated : page)));
     };
     img.src = source;
+  };
+
+  const rotatePage = (index: number) => rotatePageBy(index, 90);
+
+  const cropPage = (index: number) => {
+    const source = capturedPages[index];
+    if (!source) return;
+    const { top, right, bottom, left } = cropMargins;
+    if (top + bottom >= 80 || left + right >= 80) {
+      alert("Crop margins must leave at least 20% of the page.");
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      const x = Math.round((img.width * left) / 100);
+      const y = Math.round((img.height * top) / 100);
+      canvas.width = Math.max(1, Math.round((img.width * (100 - left - right)) / 100));
+      canvas.height = Math.max(1, Math.round((img.height * (100 - top - bottom)) / 100));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(img, x, y, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+      const cropped = canvas.toDataURL("image/jpeg", 0.92);
+      setCapturedPages((pages) => pages.map((page, i) => (i === index ? cropped : page)));
+      setCropMargins({ top: 0, right: 0, bottom: 0, left: 0 });
+      setStraightenAngle(0);
+    };
+    img.src = source;
+  };
+
+  const applyStraighten = () => {
+    if (Math.abs(straightenAngle) < 0.1) return;
+    rotatePageBy(selectedPageIndex, straightenAngle);
+    setStraightenAngle(0);
   };
 
   // Start Live Camera
@@ -232,6 +272,8 @@ export default function SnapDocAI() {
         return "grayscale(1) contrast(1.8) brightness(1.1)";
       case "grayscale":
         return "grayscale(1) contrast(1.1)";
+      case "clean":
+        return "grayscale(1) contrast(1.55) brightness(1.08)";
       default:
         return "none";
     }
@@ -257,8 +299,40 @@ export default function SnapDocAI() {
       canvas.width = img.width;
       canvas.height = img.height;
       const ctx = canvas.getContext("2d")!;
-      ctx.filter = getFilterStyle(currentFilter);
+      ctx.filter = currentFilter === "clean" ? "none" : getFilterStyle(currentFilter);
       ctx.drawImage(img, 0, 0);
+      if (currentFilter === "clean") {
+        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = frame.data;
+        const tileSize = 24;
+        for (let ty = 0; ty < canvas.height; ty += tileSize) {
+          for (let tx = 0; tx < canvas.width; tx += tileSize) {
+            const xEnd = Math.min(canvas.width, tx + tileSize);
+            const yEnd = Math.min(canvas.height, ty + tileSize);
+            let sum = 0;
+            let count = 0;
+            for (let py = ty; py < yEnd; py += 1) {
+              for (let px = tx; px < xEnd; px += 1) {
+                const offset = (py * canvas.width + px) * 4;
+                sum += 0.299 * data[offset] + 0.587 * data[offset + 1] + 0.114 * data[offset + 2];
+                count += 1;
+              }
+            }
+            const threshold = Math.max(145, sum / Math.max(1, count) - 22);
+            for (let py = ty; py < yEnd; py += 1) {
+              for (let px = tx; px < xEnd; px += 1) {
+                const offset = (py * canvas.width + px) * 4;
+                const luminance = 0.299 * data[offset] + 0.587 * data[offset + 1] + 0.114 * data[offset + 2];
+                const value = luminance < threshold ? 0 : 255;
+                data[offset] = value;
+                data[offset + 1] = value;
+                data[offset + 2] = value;
+              }
+            }
+          }
+        }
+        ctx.putImageData(frame, 0, 0);
+      }
 
       const processedData = canvas.toDataURL("image/jpeg", 0.85);
       const pdfWidth = pdf.internal.pageSize.getWidth();
@@ -608,7 +682,7 @@ export default function SnapDocAI() {
             </div>
             <div className="flex gap-2 overflow-x-auto pb-2">
               {capturedPages.map((page, index) => (
-                <div key={index} className="w-24 shrink-0 rounded-xl border border-neutral-200 bg-neutral-50 p-1.5">
+                <div key={index} onClick={() => setSelectedPageIndex(index)} className={`w-24 shrink-0 rounded-xl border p-1.5 ${selectedPageIndex === index ? "border-emerald-500 bg-emerald-50" : "border-neutral-200 bg-neutral-50"}`}>
                   <img src={page} alt={`Page ${index + 1}`} className="h-20 w-full rounded-lg object-contain bg-white" />
                   <p className="my-1 text-center text-[10px] font-semibold text-neutral-600">Page {index + 1}</p>
                   <div className="flex justify-between gap-1">
@@ -626,12 +700,32 @@ export default function SnapDocAI() {
           <div className="flex-1 bg-neutral-100 rounded-2xl p-4 flex items-center justify-center overflow-hidden border border-neutral-200">
             {capturedPages[0] && (
               <img
-                src={capturedPages[0]}
+                src={capturedPages[selectedPageIndex] || capturedPages[0]}
                 alt="Preview"
                 style={{ filter: getFilterStyle(currentFilter) }}
                 className="max-h-[360px] rounded-lg shadow-md transition-all duration-300"
               />
             )}
+          </div>
+
+          <div className="mt-4 rounded-xl border border-neutral-200 bg-neutral-50 p-3">
+            <p className="mb-2 text-xs font-semibold text-neutral-700">Crop & straighten selected page</p>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+              {(["top", "right", "bottom", "left"] as const).map((side) => (
+                <label key={side} className="text-[10px] capitalize text-neutral-600">
+                  {side}: {cropMargins[side]}%
+                  <input type="range" min="0" max="35" value={cropMargins[side]} onChange={(e) => setCropMargins((m) => ({ ...m, [side]: Number(e.target.value) }))} className="block w-full" />
+                </label>
+              ))}
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <button onClick={() => cropPage(selectedPageIndex)} className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-emerald-700 border border-emerald-200">Apply crop</button>
+              <label className="flex-1 text-[10px] text-neutral-600">
+                Straighten: {straightenAngle}°
+                <input type="range" min="-15" max="15" step="0.5" value={straightenAngle} onChange={(e) => setStraightenAngle(Number(e.target.value))} className="block w-full" />
+              </label>
+              <button onClick={applyStraighten} className="rounded-lg bg-white px-3 py-2 text-xs font-semibold border border-neutral-200">Apply</button>
+            </div>
           </div>
 
           <div className="mt-4 flex gap-2">
@@ -663,6 +757,7 @@ export default function SnapDocAI() {
                 { id: "magic", label: "Magic Color" },
                 { id: "bw", label: "Super B&W" },
                 { id: "grayscale", label: "Grayscale" },
+                { id: "clean", label: "Shadow Clean" },
                 { id: "original", label: "Original" },
               ].map((f) => (
                 <button
