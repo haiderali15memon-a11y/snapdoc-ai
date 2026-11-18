@@ -254,14 +254,14 @@ export default function SnapDocAI() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          fileName: newDoc.title,
           pageCount: capturedPages.length,
           filterUsed: currentFilter,
           category: docCategory,
         }),
       });
+      if (!logResponse.ok) console.warn("Scan metadata was not saved:", await logResponse.json().catch(() => ({})));
     } catch (error) {
-      console.error("Background log skipped:", error);
+      console.error("Background metadata log skipped:", error);
     }
 
     // Reset & Return Home
