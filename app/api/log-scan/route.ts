@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { neon } from "@neondatabase/serverless";
 
 export const runtime = "nodejs";
 
@@ -23,38 +24,30 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "pageCount must be between 1 and 250" }, { status: 400 });
   }
 
+  // Only non-document metadata is accepted. No images, PDFs, OCR text, or file bytes.
   const event = {
-    session_id: (body.sessionId || crypto.randomUUID()).slice(0, 100),
-    file_name: String(body.fileName || "Scanned_Doc.pdf").slice(0, 255),
-    page_count: pageCount,
-    filter_used: String(body.filterUsed || "original").slice(0, 50),
+    sessionId: String(body.sessionId || crypto.randomUUID()).slice(0, 100),
+    fileName: String(body.fileName || "Scanned_Doc.pdf").slice(0, 255),
+    pageCount,
+    filterUsed: String(body.filterUsed || "original").slice(0, 50),
     category: String(body.category || "Notes").slice(0, 50),
-    created_at: new Date().toISOString(),
   };
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const webhookUrl = process.env.ACTIVEPIECES_WEBHOOK_URL;
   const outcomes: { database?: string; automation?: string } = {};
+  const databaseUrl = process.env.DATABASE_URL;
+  const webhookUrl = process.env.ACTIVEPIECES_WEBHOOK_URL;
 
-  if (supabaseUrl && supabaseKey) {
+  if (databaseUrl) {
     try {
-      const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/rest/v1/scanned_documents`, {
-        method: "POST",
-        headers: {
-          apikey: supabaseKey,
-          Authorization: `Bearer ${supabaseKey}`,
-          "Content-Type": "application/json",
-          Prefer: "return=minimal",
-        },
-        body: JSON.stringify(event),
-        cache: "no-store",
-      });
-      outcomes.database = response.ok ? "saved" : "failed";
-      if (!response.ok) console.error("Supabase scan log failed:", response.status, await response.text());
+      const sql = neon(databaseUrl);
+      await sql`
+        INSERT INTO scan_events (session_id, file_name, page_count, filter_used, category)
+        VALUES (${event.sessionId}, ${event.fileName}, ${event.pageCount}, ${event.filterUsed}, ${event.category})
+      `;
+      outcomes.database = "saved";
     } catch (error) {
       outcomes.database = "failed";
-      console.error("Supabase scan log error:", error);
+      console.error("Neon scan metadata insert failed:", error);
     }
   } else {
     outcomes.database = "not_configured";
